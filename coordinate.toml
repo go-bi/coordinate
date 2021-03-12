@@ -1,0 +1,29 @@
+NoTTY = false
+ConnectionsPerBox = 5 # default to 3
+CallBackIps = ["192.168.1.12","hackerbox"] # One will be randomly chosen every time we drop one
+
+[[target]]
+Ips = ["127.0.0.1","192.168.140.138","172.17.156.129"]
+ReplaceX = "4-5" # if you have an X in the above, iterate through range here
+Modules = ["STARFOX",]
+# user must be root or a sudoer
+# TODO accept array of users/passwords to try, and comm through instance which one works
+Username = "root"
+Password = "Password1!"
+
+[[target]]
+Ips = ["10.20.10.11","10.20.10.13"]
+Modules = ["ireul",]
+
+[[module]]
+Name = "ireul"
+Stealthy = true # default false
+UseRoulette = true # default true. if false, when there are multiple ways to do something, do all of them
+Level = 3 # default 5. range 1-5
+
+[[module]]
+Name = "STARFOX"
+
+
+# #CALLBACK_IP
+# #ERROR string until newline
