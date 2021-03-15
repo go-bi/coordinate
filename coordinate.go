@@ -3,6 +3,7 @@ package main
 import (
     "errors"
     "sync"
+    "strings"
     "strconv"
     "os"
 
@@ -19,34 +20,32 @@ type Config struct {
 
 type Target struct {
     Ips []string
-    //Ports []int
     Modules []string
-    Username, Password string
+    Username, Password []string
+    ReplaceX string
+    Stealthy bool
+    Port, Level int
 }
 
 type Instance struct {
-    Id, Ip, Username, Password string
-    Port int
+    Id, Ip string
+    Username, Password []string
+    Stealthy bool
+    Level, Port int
 }
 
 type Module struct {
     Name string
-    Stealthy bool
-    UseRoulette bool
-    Level int
+    Debug bool
     Enabled []string
-    Disabled []string // cannot have both enabled and disabled
 }
 
 type Script struct {
     Name string
     Level int
-    Options map[string]string
-    // Source
     IfState int
     RouletteState int
     OutputState int
-    Debug bool
 }
 
 var c = Config{}
@@ -71,10 +70,39 @@ func main() {
     tid := 0
     for _, target := range c.Target {
         for _, ip := range target.Ips {
-            // if strings.Contains(ip, "x")
-            // parse number range, function returns iterable
-            // for each num
-                // strings.Replace(ip, "x", num 
+            ip = strings.ToLower(ip)
+            if strings.Contains(ip, "x") {
+                splitReplace := strings.Split(target.ReplaceX, "-")
+                if len(splitReplace) != 2 {
+                    Err("invalid format of ReplaceX", splitReplace)
+                    break
+                }
+                minNum, err := strconv.Atoi(splitReplace[0])
+                if err != nil {
+                    Err("invalid range in ReplaceX", splitReplace)
+                    break
+                }
+                maxNum, err := strconv.Atoi(splitReplace[1])
+                if err != nil {
+                    Err("invalid range in ReplaceX", splitReplace)
+                    break
+                }
+                for i := minNum; i <= maxNum; i++ {
+                    for _, m := range target.Modules {
+                        i := Instance {
+                            Id: strconv.Itoa(tid),
+                            Ip: strings.Replace(ip, "x", strconv.Itoa(i), 1),
+                            Port: 22,
+                            Username: target.Username,
+                            Password: target.Password,
+                            Stealthy: target.Stealthy,
+                        }
+                        wg.Add(1)
+                        tid++
+                        go runner(i, moduleLookup(m), &wg)
+                    }
+                }
+            } else {
                 for _, m := range target.Modules {
                     i := Instance {
                         Id: strconv.Itoa(tid),
@@ -82,16 +110,14 @@ func main() {
                         Port: 22,
                         Username: target.Username,
                         Password: target.Password,
+                        Stealthy: target.Stealthy,
                     }
                     wg.Add(1)
                     tid++
                     go runner(i, moduleLookup(m), &wg)
                 }
-
-            // else
-                //runner code again
+            }
         }
-    //}
     }
     wg.Wait()
 }

