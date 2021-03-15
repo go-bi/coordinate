@@ -85,8 +85,9 @@ The second assumption is that any module scripts will end in `.sh`. That's it fo
 Onto module contents. The name of each module is the name of the file without `.sh`. For logic, there is no persistent state across files or across modules. Every file is interpreted at the same time it's executed. With that in mind, let's take a look at what `pam.sh` might look like:
 
 ```bash
-# This is metadata about the file. DESC has no impact on the execution of the file, since it's not a keyword, and thus acts like any other comment.
-#DESC wrecks pam lol
+# This is metadata about the file. DESC has no impact on the execution
+# of the file, since it's not a keyword, and thus acts like any other comment.
+#DESC PAM Backdoors
 
 # Any line starting with an octothorpe (#) without being a directive
 # is treated as a comment, like this line.

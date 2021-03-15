@@ -1,4 +1,5 @@
 coordinate
+coordinate.toml
 tags
 *.swp
 *.zip
